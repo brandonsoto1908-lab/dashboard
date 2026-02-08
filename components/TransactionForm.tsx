@@ -13,12 +13,18 @@ interface TransactionFormProps {
 }
 
 export default function TransactionForm({ user, onTransactionAdded, onClose, currentBalance }: TransactionFormProps) {
-  const [type, setType] = useState<'income' | 'expense'>('expense')
+  const [type, setType] = useState<'income' | 'expense' | 'salary'>('expense')
   const [amount, setAmount] = useState('')
   const [category, setCategory] = useState('')
   const [description, setDescription] = useState('')
   const [date, setDate] = useState(new Date().toISOString().split('T')[0])
   const [isLoading, setIsLoading] = useState(false)
+
+  // Salary specific states
+  const [salaryAmount, setSalaryAmount] = useState('')
+  const [frequency, setFrequency] = useState<'monthly' | 'biweekly' | 'semimonthly' | 'weekly'>('monthly')
+  const [extraHours, setExtraHours] = useState('')
+  const [extraRate, setExtraRate] = useState('')
 
   // Función para formatear números con comas
   const formatNumberWithCommas = (value: string): string => {
@@ -45,10 +51,14 @@ export default function TransactionForm({ user, onTransactionAdded, onClose, cur
     e.preventDefault()
     setIsLoading(true)
 
-    const numericAmount = getNumericValue(amount)
+    const numericAmount = type === 'salary' ? getNumericValue(salaryAmount) : getNumericValue(amount)
+    const numericExtraHours = parseFloat(extraHours) || 0
+    const numericExtraRate = getNumericValue(extraRate)
+    const overtime = numericExtraHours * numericExtraRate
+    const totalAmount = numericAmount + (type === 'salary' ? overtime : 0)
     
     // Validar que el monto sea mayor a 0
-    if (numericAmount <= 0) {
+    if (totalAmount <= 0) {
       alert('El monto debe ser mayor a 0.')
       setIsLoading(false)
       return
@@ -62,18 +72,24 @@ export default function TransactionForm({ user, onTransactionAdded, onClose, cur
     }
 
     try {
+      // For salary, always insert as income with category 'Salario'
+      const insertPayload: any = {
+        user_id: user.id,
+        type: type === 'salary' ? 'income' : type,
+        amount: totalAmount,
+        category: type === 'salary' ? 'Salario' : category,
+        description: (type === 'salary' ? `Salario (${frequency})` : description) || null,
+        date,
+      }
+
+      // append overtime details to description if salary
+      if (type === 'salary' && overtime > 0) {
+        insertPayload.description = `${insertPayload.description} - Horas extra: ${numericExtraHours} x ${numericExtraRate.toLocaleString('es-CR', { minimumFractionDigits: 2 })} = ${overtime.toLocaleString('es-CR', { minimumFractionDigits: 2 })}`
+      }
+
       const { data: transaction, error } = await supabase
         .from('transactions')
-        .insert([
-          {
-            user_id: user.id,
-            type,
-            amount: numericAmount,
-            category,
-            description: description || null,
-            date,
-          },
-        ])
+        .insert([insertPayload])
         .select()
         .single()
 
@@ -89,7 +105,7 @@ export default function TransactionForm({ user, onTransactionAdded, onClose, cur
     }
   }
 
-  const availableCategories = type === 'income' ? categories.income : categories.expense
+  const availableCategories = type === 'income' || type === 'salary' ? categories.income : categories.expense
 
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
@@ -125,7 +141,7 @@ export default function TransactionForm({ user, onTransactionAdded, onClose, cur
                     type="radio"
                     value="income"
                     checked={type === 'income'}
-                    onChange={(e) => setType(e.target.value as 'income' | 'expense')}
+                    onChange={(e) => setType(e.target.value as 'income' | 'expense' | 'salary')}
                     className="mr-2"
                   />
                   <span className="text-green-600">Ingreso</span>
@@ -135,46 +151,113 @@ export default function TransactionForm({ user, onTransactionAdded, onClose, cur
                     type="radio"
                     value="expense"
                     checked={type === 'expense'}
-                    onChange={(e) => setType(e.target.value as 'income' | 'expense')}
+                    onChange={(e) => setType(e.target.value as 'income' | 'expense' | 'salary')}
                     className="mr-2"
                   />
                   <span className="text-red-600">Gasto</span>
                 </label>
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    value="salary"
+                    checked={type === 'salary'}
+                    onChange={(e) => setType(e.target.value as 'income' | 'expense' | 'salary')}
+                    className="mr-2"
+                  />
+                  <span className="text-blue-600">Salario</span>
+                </label>
               </div>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Monto
-              </label>
-              <input
-                type="text"
-                required
-                value={amount}
-                onChange={(e) => handleAmountChange(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                placeholder="₡0.00"
-              />
-            </div>
+            {type === 'salary' ? (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Monto base (₡)</label>
+                  <input
+                    type="text"
+                    required
+                    value={salaryAmount}
+                    onChange={(e) => setSalaryAmount(formatNumberWithCommas(e.target.value))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                    placeholder="₡0.00"
+                  />
+                </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Categoría
-              </label>
-              <select
-                required
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-              >
-                <option value="">Selecciona una categoría</option>
-                {availableCategories.map((cat) => (
-                  <option key={cat.name} value={cat.name}>
-                    {cat.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Frecuencia</label>
+                  <select
+                    value={frequency}
+                    onChange={(e) => setFrequency(e.target.value as any)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  >
+                    <option value="monthly">Mensual</option>
+                    <option value="biweekly">Quincenal</option>
+                    <option value="semimonthly">Bisemanal (2 pagos/mes)</option>
+                    <option value="weekly">Semanal</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Horas extra</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.25"
+                      value={extraHours}
+                      onChange={(e) => setExtraHours(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Pago por hora (₡)</label>
+                    <input
+                      type="text"
+                      value={extraRate}
+                      onChange={(e) => setExtraRate(formatNumberWithCommas(e.target.value))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      placeholder="₡0.00"
+                    />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Monto
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={amount}
+                    onChange={(e) => handleAmountChange(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                    placeholder="₡0.00"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Categoría
+                  </label>
+                  <select
+                    required
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                  >
+                    <option value="">Selecciona una categoría</option>
+                    {availableCategories.map((cat) => (
+                      <option key={cat.name} value={cat.name}>
+                        {cat.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
